@@ -27,7 +27,7 @@ var Version = "HEAD"
 type diffCmd struct {
 	release         string
 	chart           string
-    version         string
+	version         string
 	client          helm.Interface
 	valueFiles      valueFiles
 	values          []string
