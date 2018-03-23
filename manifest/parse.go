@@ -3,10 +3,32 @@ package manifest
 import (
 	"bufio"
 	"bytes"
+	"fmt"
+	"log"
 	"strings"
+
+	"gopkg.in/yaml.v2"
 )
 
-var yamlSeperator = []byte("---\n# Source: ")
+var yamlSeperator = []byte("\n---\n")
+
+type MappingResult struct {
+	Name    string
+	Kind    string
+	Content string
+}
+
+type metadata struct {
+	ApiVersion string `yaml:"apiVersion"`
+	Kind       string
+	Metadata   struct {
+		Name string
+	}
+}
+
+func (m metadata) String() string {
+	return fmt.Sprintf("%s, %s (%s)", m.Metadata.Name, m.Kind, m.ApiVersion)
+}
 
 func scanYamlSpecs(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if atEOF && len(data) == 0 {
@@ -31,7 +53,7 @@ func splitSpec(token string) (string, string) {
 	return "", ""
 }
 
-func Parse(manifest string) map[string]string {
+func Parse(manifest string) map[string]*MappingResult {
 	scanner := bufio.NewScanner(strings.NewReader(manifest))
 	scanner.Split(scanYamlSpecs)
 	//Allow for tokens (specs) up to 1M in size
@@ -39,11 +61,27 @@ func Parse(manifest string) map[string]string {
 	//Discard the first result, we only care about everything after the first seperator
 	scanner.Scan()
 
-	result := make(map[string]string)
+	result := make(map[string]*MappingResult)
 
 	for scanner.Scan() {
-		source, content := splitSpec(scanner.Text())
-		result[source] = content
+		content := scanner.Text()
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		var metadata metadata
+		if err := yaml.Unmarshal([]byte(content), &metadata); err != nil {
+			log.Fatalf("YAML unmarshal error: %s\nCan't unmarshal %s", err, content)
+		}
+		name := metadata.String()
+		if _, ok := result[name]; ok {
+			log.Printf("Error: Found duplicate key %#v in manifest", name)
+		} else {
+			result[name] = &MappingResult{
+				Name:    name,
+				Kind:    metadata.Kind,
+				Content: content,
+			}
+		}
 	}
 	return result
 

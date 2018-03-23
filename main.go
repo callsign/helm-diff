@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mgutz/ansi"
 	"github.com/spf13/cobra"
 	"k8s.io/helm/pkg/helm"
 
@@ -20,21 +21,22 @@ This can be used visualize what changes a helm upgrade will
 perform.
 `
 
-var Version string = "HEAD"
+// Version identifier populated via the CI/CD process.
+var Version = "HEAD"
 
 type diffCmd struct {
-	release string
-	chart   string
-	version string
-	//	out     io.Writer
-	client helm.Interface
-	//	version int32
-	valueFiles valueFiles
-	values     []string
+	release         string
+	chart           string
+    version         string
+	client          helm.Interface
+	valueFiles      valueFiles
+	values          []string
+	reuseValues     bool
+	resetValues     bool
+	suppressedKinds []string
 }
 
 func main() {
-
 	diff := diffCmd{}
 
 	cmd := &cobra.Command{
@@ -46,8 +48,17 @@ func main() {
 				fmt.Println(Version)
 				return nil
 			}
+
 			if err := checkArgsLength(len(args), "release name", "chart path"); err != nil {
 				return err
+			}
+
+			if q, _ := cmd.Flags().GetBool("suppress-secrets"); q {
+				diff.suppressedKinds = append(diff.suppressedKinds, "Secret")
+			}
+
+			if nc, _ := cmd.Flags().GetBool("no-color"); nc {
+				ansi.DisableColors(true)
 			}
 
 			diff.release = args[0]
@@ -69,8 +80,13 @@ func main() {
 
 	f := cmd.Flags()
 	f.BoolP("version", "v", false, "show version")
+	f.BoolP("suppress-secrets", "q", false, "suppress secrets in the output")
+	f.Bool("no-color", false, "remove colors from the output")
 	f.VarP(&diff.valueFiles, "values", "f", "specify values in a YAML file (can specify multiple)")
 	f.StringArrayVar(&diff.values, "set", []string{}, "set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2)")
+	f.BoolVar(&diff.reuseValues, "reuse-values", false, "reuse the last release's values and merge in any new values")
+	f.BoolVar(&diff.resetValues, "reset-values", false, "reset the values to the ones built into the chart and merge in any new values")
+	f.StringArrayVar(&diff.suppressedKinds, "suppress", []string{}, "allows suppression of the values listed in the diff output")
 
 	if err := cmd.Execute(); err != nil {
 		os.Exit(1)
@@ -98,6 +114,8 @@ func (d *diffCmd) run() error {
 		d.release,
 		chartPath,
 		helm.UpdateValueOverrides(rawVals),
+		helm.ReuseValues(d.reuseValues),
+		helm.ResetValues(d.resetValues),
 		helm.UpgradeDryRun(true),
 	)
 	if err != nil {
@@ -107,7 +125,7 @@ func (d *diffCmd) run() error {
 	currentSpecs := manifest.Parse(releaseResponse.Release.Manifest)
 	newSpecs := manifest.Parse(upgradeResponse.Release.Manifest)
 
-	diffManifests(currentSpecs, newSpecs, os.Stdout)
+	diffManifests(currentSpecs, newSpecs, d.suppressedKinds, os.Stdout)
 
 	return nil
 }
